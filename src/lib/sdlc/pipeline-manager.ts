@@ -154,6 +154,39 @@ export async function getPipelineRun(runId: string): Promise<PipelineRun | null>
   return row ? toRun(row) : null;
 }
 
+/**
+ * Field selection for list queries — excludes heavy JSON blobs that are only
+ * needed when viewing a single run's details. stepResults (~28 KB/run) and
+ * finalOutput (~15 KB/run) are fetched per-run via GET /[runId], so including
+ * them in list responses wastes ~1 MB of bandwidth for a 20-run page.
+ */
+const SELECT_LIST_FIELDS = {
+  id: true,
+  status: true,
+  taskDescription: true,
+  taskType: true,
+  complexity: true,
+  pipeline: true,
+  currentStep: true,
+  stepMetrics: true,
+  error: true,
+  prUrl: true,
+  approvalFeedback: true,
+  modelId: true,
+  useSmartRouting: true,
+  requireApproval: true,
+  jobId: true,
+  agentId: true,
+  userId: true,
+  repoUrl: true,
+  sourceRepoUrl: true,
+  startedAt: true,
+  completedAt: true,
+  createdAt: true,
+  updatedAt: true,
+  // stepResults and finalOutput intentionally omitted — fetched per-run only
+} as const;
+
 export async function listPipelineRuns(
   agentId: string,
   options: ListPipelineRunsOptions = {},
@@ -166,6 +199,7 @@ export async function listPipelineRuns(
   const [rows, total] = await Promise.all([
     prisma.pipelineRun.findMany({
       where,
+      select: SELECT_LIST_FIELDS,
       orderBy: { createdAt: "desc" },
       take: Math.min(options.limit ?? 20, 100),
       skip: options.offset ?? 0,
@@ -173,7 +207,16 @@ export async function listPipelineRuns(
     prisma.pipelineRun.count({ where }),
   ]);
 
-  return { runs: rows.map(toRun), total };
+  return {
+    runs: rows.map((row) =>
+      toRun({
+        ...row,
+        stepResults: {},     // not fetched in list — UI loads per-run
+        finalOutput: null,   // not fetched in list — UI loads per-run
+      }),
+    ),
+    total,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -236,6 +279,51 @@ export async function advancePipelineStep(
   });
 
   return toRun(row);
+}
+
+
+/**
+ * Saves a step's output to stepResults WITHOUT advancing currentStep.
+ *
+ * Use this for gate BLOCK decisions — the reviewer's output is persisted
+ * so the UI can display the full report, but currentStep stays at the gate's
+ * index so retry can restart from the correct position (last implementation
+ * step before the gate, per retry route logic).
+ *
+ * Contrast with advancePipelineStep which does both: save output AND advance.
+ */
+export async function saveStepOutput(
+  runId: string,
+  stepIndex: number,
+  stepOutput: string,
+): Promise<void> {
+  await prisma.$transaction(async (tx) => {
+    const current = await tx.pipelineRun.findUnique({
+      where: { id: runId },
+      select: { stepResults: true },
+    });
+    const existing =
+      current?.stepResults &&
+      typeof current.stepResults === "object" &&
+      !Array.isArray(current.stepResults)
+        ? (current.stepResults as Record<string, string>)
+        : {};
+    await tx.pipelineRun.update({
+      where: { id: runId },
+      data: {
+        stepResults: {
+          ...existing,
+          [String(stepIndex)]: stepOutput,
+        } as Prisma.InputJsonValue,
+        // NOTE: currentStep intentionally NOT updated here
+      },
+    });
+  });
+
+  logger.info("Pipeline step output saved (currentStep unchanged)", {
+    runId,
+    stepIndex,
+  });
 }
 
 /** Called by worker on successful completion */

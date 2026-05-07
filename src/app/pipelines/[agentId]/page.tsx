@@ -90,6 +90,9 @@ interface PipelineRun {
   createdAt: string;
   stepResults: Record<string, string>;
   approvalFeedback: string | null;
+  modelId: string | null;
+  useSmartRouting: boolean;
+  requireApproval: boolean;
 }
 
 function StatusIcon({ status }: { status: string }) {
@@ -560,7 +563,10 @@ function RunRow({ run, agentId, onMutate }: { run: PipelineRun; agentId: string;
   const [retrying, setRetrying] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
-  const isActive = run.status === "RUNNING" || run.status === "PENDING";
+  const isActive =
+    run.status === "RUNNING" ||
+    run.status === "PENDING" ||
+    run.status === "AWAITING_APPROVAL";
 
   const { data, isLoading } = useSWR<{ success: boolean; data: PipelineRun }>(
     open ? `/api/agents/${agentId}/pipelines/${run.id}` : null,
@@ -673,8 +679,8 @@ function RunRow({ run, agentId, onMutate }: { run: PipelineRun; agentId: string;
               {cancelling ? <Loader2 className="size-3 animate-spin" /> : <Ban className="size-3" />}
             </button>
           )}
-          {/* Retry — for FAILED only */}
-          {run.status === "FAILED" && (
+          {/* Retry — for FAILED or CANCELLED */}
+          {(run.status === "FAILED" || run.status === "CANCELLED") && (
             <button
               onClick={(e) => { e.stopPropagation(); void handleRetry(); }}
               disabled={retrying}
@@ -758,6 +764,45 @@ function RunRow({ run, agentId, onMutate }: { run: PipelineRun; agentId: string;
                   <p className="text-xs text-red-300 font-mono">{detail.error}</p>
                 </div>
               )}
+
+              {/* Step outputs for FAILED runs — shows gate reviewer details on BLOCK */}
+              {detail.status === "FAILED" &&
+                detail.stepResults &&
+                Object.keys(detail.stepResults as Record<string, string>).length > 0 && (
+                  <div className="space-y-3">
+                    <h4 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider flex items-center gap-1.5">
+                      <BarChart3 className="size-3" /> Outputi koraka
+                    </h4>
+                    {(detail.pipeline as string[]).map((stepId: string, i: number) => {
+                      const output = (detail.stepResults as Record<string, string>)?.[String(i)];
+                      if (!output) return null;
+                      const isGate =
+                        stepId.includes("reviewer") || stepId.includes("security");
+                      return (
+                        <div key={`${stepId}-${i}`} className="space-y-1">
+                          <p
+                            className={cn(
+                              "text-xs font-semibold uppercase tracking-wider",
+                              isGate ? "text-amber-400" : "text-zinc-500",
+                            )}
+                          >
+                            {stepId}
+                            {isGate && (
+                              <span className="ml-2 normal-case font-normal text-amber-500/70">
+                                (reviewer output)
+                              </span>
+                            )}
+                          </p>
+                          <pre className="bg-zinc-800/50 rounded-lg p-3 text-xs text-zinc-300 overflow-auto max-h-64 whitespace-pre-wrap leading-relaxed">
+                            {output.length > 4000
+                              ? output.slice(0, 4000) + "\n\n[... skraćeno ...]"
+                              : output}
+                          </pre>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
 
               {/* Final output */}
               {detail.finalOutput && (

@@ -25,6 +25,7 @@
  */
 
 import { rmSync } from "node:fs";
+import { saveStepOutput } from "@/lib/sdlc/pipeline-manager";
 import { join } from "node:path";
 import { logger } from "@/lib/logger";
 import { startSpan } from "@/lib/observability/tracer";
@@ -78,7 +79,7 @@ const PLANNING_STEPS = new Set([
 
 /** Steps that produce implementation code — receive architecturePlan + RAG context.
  *  Includes both bare IDs and ecc-prefixed variants. */
-const IMPLEMENTATION_STEPS = new Set([
+export const IMPLEMENTATION_STEPS = new Set([
   // Bare IDs
   "codegen", "developer", "implementation", "coder",
   "code_generator", "feature_developer",
@@ -99,7 +100,7 @@ const TEST_STEPS = new Set([
 
 /** Steps that act as quality/security gates — use generateObject() for structured
  *  output; decision is read and drives pipeline behavior (isDraft in pr_generation). */
-const GATE_STEPS = new Set([
+export const GATE_STEPS = new Set([
   "ecc-code-reviewer",
   "ecc-security-reviewer",
 ]);
@@ -412,7 +413,7 @@ export async function runPipeline(
         // Restore phase state so IMPLEMENTATION_STEPS and feedback loop work
         // correctly when resuming mid-pipeline.
         if (PLANNING_STEPS.has(pipeline[i])) {
-          architecturePlan += `\n\n## ${pipeline[i]}\n${prevOutput.slice(0, 2000)}`;
+          architecturePlan += `\n\n## ${pipeline[i]}\n${prevOutput.slice(0, 4000)}`;
         }
         if (IMPLEMENTATION_STEPS.has(pipeline[i])) {
           lastImplStepIdx = i;
@@ -882,10 +883,12 @@ export async function runPipeline(
           }
 
           if (gateDecision === "BLOCK") {
-            // Save the gate output BEFORE throwing so the user can read the full review.
-            // Without this, markPipelineFailed only stores the error message, losing
-            // all the reviewer's findings (issues list, CVSS scores, etc.).
-            await onStepComplete(stepIdx, stepOutput);
+            // Save the reviewer's output WITHOUT advancing currentStep.
+            // If we called onStepComplete here, advancePipelineStep would set
+            // currentStep = gateIdx + 1, making retry skip the gate entirely.
+            // saveStepOutput persists the full report for the UI while leaving
+            // currentStep at gateIdx so retry restarts from the last impl step.
+            await saveStepOutput(runId, stepIdx, stepOutput);
 
             logger.warn("Pipeline: gate step blocked pipeline", {
               runId, stepIdx, stepId, summary: gateSummary,
