@@ -327,6 +327,9 @@ export async function runPipeline(
       "sdlc.run.id": runId,
       "sdlc.agent.id": agentId,
       "sdlc.pipeline.step_count": pipeline.length,
+      // AAIF 2026 required attributes
+      "gen_ai.operation.name": "sdlc.pipeline",
+      "gen_ai.agent.id": agentId,
     },
   });
 
@@ -709,6 +712,7 @@ export async function runPipeline(
                 agentId,
                 modelId: escalatedModelId,
                 attempt,
+                parentTraceContext: pipelineSpan.traceContext,
               },
               lastImplSystemPrompt,
               pipelineAC.signal,
@@ -830,6 +834,9 @@ export async function runPipeline(
           "sdlc.step.index": stepIdx,
           "sdlc.step.phase": phase,
           "gen_ai.request.model": stepModelId,
+          // AAIF 2026 required attributes
+          "gen_ai.operation.name": `sdlc.step.${phase}`,
+          "gen_ai.agent.id": agentId,
         },
       });
 
@@ -1146,6 +1153,7 @@ export async function runPipeline(
                     agentId,
                     modelId: escalatedModelId,
                     attempt,
+                    parentTraceContext: stepSpan.traceContext,
                   },
                   systemPrompt,
                   pipelineAC.signal,
@@ -1283,6 +1291,7 @@ export async function runPipeline(
               agentId,
               modelId: escalatedModelId,
               attempt,
+              parentTraceContext: stepSpan.traceContext,
             },
             lastImplSystemPrompt,
             pipelineAC.signal,

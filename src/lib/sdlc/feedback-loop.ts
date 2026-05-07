@@ -26,6 +26,8 @@
  */
 
 import { logger } from "@/lib/logger";
+import type { TraceContext } from "@/lib/observability/types";
+import { startSpan } from "@/lib/observability/tracer";
 import {
   parseTscErrors,
   parseVitestFailures,
@@ -54,6 +56,8 @@ export interface FeedbackLoopInput {
   modelId: string;
   /** Current retry attempt number (1-based) */
   attempt: number;
+  /** Optional parent trace context for connecting feedback spans to the pipeline span */
+  parentTraceContext?: TraceContext;
 }
 
 export interface FeedbackLoopResult {
@@ -201,6 +205,16 @@ export async function runFeedbackIteration(
     ? AbortSignal.any([timeoutSignal, externalSignal])
     : timeoutSignal;
 
+  const feedbackSpan = startSpan("sdlc.feedback_iteration", {
+    parentContext: input.parentTraceContext,
+    attributes: {
+      "gen_ai.operation.name": "sdlc.feedback_loop",
+      "gen_ai.agent.id": input.agentId,
+      "gen_ai.request.model": input.modelId,
+      "sdlc.feedback.attempt": input.attempt,
+    },
+  });
+
   try {
     const result = await generateText({
       model,
@@ -256,7 +270,8 @@ export async function runFeedbackIteration(
       outputTokens: 0,
     };
   } finally {
-    // No manual cleanup needed — AbortSignal.timeout() is self-managed.
+    // End the OTel span — prevents leak on AbortError or unexpected throws.
+    feedbackSpan?.end();
   }
 }
 
