@@ -12,7 +12,6 @@ const VALID_CODEGEN = {
   files: [VALID_FILE],
   summary: "Generated a module",
   slug: "sum-array",
-  runId: "a3f9e1b7",
 };
 
 describe("CodeGenOutputSchema", () => {
@@ -22,7 +21,7 @@ describe("CodeGenOutputSchema", () => {
   });
 
   it("rejects missing files array", () => {
-    const result = CodeGenOutputSchema.safeParse({ summary: "oops", slug: "x", runId: "00000000" });
+    const result = CodeGenOutputSchema.safeParse({ summary: "oops", slug: "x" });
     expect(result.success).toBe(false);
   });
 
@@ -30,7 +29,7 @@ describe("CodeGenOutputSchema", () => {
     // .min(1) was removed from the z.array() to avoid the minItems JSON Schema keyword
     // (not supported by OpenAI strict-mode response_format). Validation is instead enforced
     // via .superRefine() which is invisible to JSON Schema generation but runs during safeParse.
-    const result = CodeGenOutputSchema.safeParse({ files: [], summary: "empty", slug: "x", runId: "00000000" });
+    const result = CodeGenOutputSchema.safeParse({ files: [], summary: "empty", slug: "x" });
     expect(result.success).toBe(false);
     if (!result.success) {
       expect(result.error.issues[0].path).toContain("files");
@@ -46,15 +45,6 @@ describe("CodeGenOutputSchema", () => {
     }
   });
 
-  it("rejects missing runId", () => {
-    const { runId: _runId, ...withoutRunId } = VALID_CODEGEN;
-    const result = CodeGenOutputSchema.safeParse(withoutRunId);
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      expect(result.error.issues.some((i) => i.path.includes("runId"))).toBe(true);
-    }
-  });
-
   it("optional fields are undefined when omitted (no defaults)", () => {
     // .default([]) was removed because OpenAI strict-mode rejects the 'default' keyword.
     // Callers use ?? [] to handle the undefined case.
@@ -62,7 +52,6 @@ describe("CodeGenOutputSchema", () => {
       files: [{ path: "a.ts", content: "const x = 1", language: "typescript", isNew: false }],
       summary: "ok",
       slug: "my-task",
-      runId: "b1c2d3e4",
     });
     expect(result.success).toBe(true);
     if (result.success) {
@@ -82,12 +71,11 @@ describe("CodeGenOutputSchema", () => {
     }
   });
 
-  it("exposes slug and runId on parsed output", () => {
+  it("exposes slug on parsed output", () => {
     const result = CodeGenOutputSchema.safeParse(VALID_CODEGEN);
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.slug).toBe("sum-array");
-      expect(result.data.runId).toBe("a3f9e1b7");
     }
   });
 });

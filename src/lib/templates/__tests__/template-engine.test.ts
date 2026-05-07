@@ -209,12 +209,20 @@ describe("exportTemplate", () => {
   });
 
   it("computes checksum correctly", async () => {
-    const { checksum } = await exportTemplate("agent-1", "org-1234567890");
-    expect(typeof checksum).toBe("string");
-    expect(checksum).toHaveLength(64); // SHA-256 hex
-    // Deterministic: same payload → same checksum
-    const { checksum: checksum2 } = await exportTemplate("agent-1", "org-1234567890");
-    expect(checksum).toBe(checksum2);
+    // Freeze time so exportedAt is identical in both calls — otherwise
+    // new Date().toISOString() produces different timestamps → different hash.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+    try {
+      const { checksum } = await exportTemplate("agent-1", "org-1234567890");
+      expect(typeof checksum).toBe("string");
+      expect(checksum).toHaveLength(64); // SHA-256 hex
+      // Deterministic: same payload → same checksum
+      const { checksum: checksum2 } = await exportTemplate("agent-1", "org-1234567890");
+      expect(checksum).toBe(checksum2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("includes heartbeat config and goals in payload", async () => {

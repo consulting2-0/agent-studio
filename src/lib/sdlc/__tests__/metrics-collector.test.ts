@@ -196,7 +196,7 @@ describe("getModelStats", () => {
       },
     ]);
 
-    const result = await getModelStats();
+    const result = await getModelStats("agent-1");
 
     expect(result[0].avgInputTokens).toBe(2000);
     expect(result[0].avgDurationMs).toBe(3000);
@@ -217,7 +217,7 @@ describe("getModelStats", () => {
       },
     ]);
 
-    const result = await getModelStats();
+    const result = await getModelStats("agent-1");
 
     expect(result[0].avgInputTokens).toBe(0);
     expect(result[0].avgDurationMs).toBe(0);
@@ -226,16 +226,16 @@ describe("getModelStats", () => {
 
   it("passes where: { phase } filter when phase param is present", async () => {
     mockModelPerfStatFindMany.mockResolvedValueOnce([]);
-    await getModelStats("planning");
+    await getModelStats("agent-1", "planning");
 
     expect(mockModelPerfStatFindMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { phase: "planning" } }),
+      expect.objectContaining({ where: expect.objectContaining({ phase: "planning" }) }),
     );
   });
 
   it("returns empty array when no stats in DB", async () => {
     mockModelPerfStatFindMany.mockResolvedValueOnce([]);
-    const result = await getModelStats();
+    const result = await getModelStats("agent-1");
     expect(result).toEqual([]);
   });
 });

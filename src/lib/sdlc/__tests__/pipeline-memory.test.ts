@@ -114,14 +114,14 @@ describe("loadRelevantMemory", () => {
     expect(result.length).toBeLessThanOrEqual(2000);
   });
 
-  it("respects take: MAX_MEMORIES_LOADED (assert findMany was called with take: 10)", async () => {
+  it("fetches pool of 30 records from DB (keyword filtering reduces to MAX_MEMORIES_LOADED in memory)", async () => {
     mockedFindMany.mockResolvedValueOnce([]);
 
     const { loadRelevantMemory } = await import("../pipeline-memory");
     await loadRelevantMemory("agent1");
 
     expect(mockedFindMany).toHaveBeenCalledWith(
-      expect.objectContaining({ take: 10 }),
+      expect.objectContaining({ take: 30 }),
     );
   });
 });
