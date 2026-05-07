@@ -287,6 +287,19 @@ export async function runPipeline(
     },
   });
 
+  // ── Pipeline-level abort controller ──────────────────────────────────────
+  // Driven by a 2-second polling loop so user cancellation propagates into
+  // long-running AI calls and feedback iterations — not just between steps.
+  // Declared before the outer try block so clearInterval() in finally is in scope.
+  const pipelineAC = new AbortController();
+  const cancelPoller = setInterval(async () => {
+    try {
+      if (await isCancelled()) pipelineAC.abort();
+    } catch {
+      // isCancelled throwing is non-fatal — poller will retry next tick
+    }
+  }, 2_000);
+
   try {
   const { getModel } = await import("@/lib/ai");
   const { generateText, generateObject } = await import("ai");
@@ -532,7 +545,7 @@ export async function runPipeline(
           codebaseReady, taskDescription, resolvedModelId, stepModelOverrides,
           agentId, userId, runId, useSmartRouting, adaptiveStatsCache,
           pipelineSpan,
-          abortSignal: AbortSignal.timeout(STEP_TIMEOUT_MS),
+          abortSignal: AbortSignal.any([pipelineAC.signal, AbortSignal.timeout(STEP_TIMEOUT_MS)]),
         };
         const parallelResults = await runParallelGateSteps([
           { stepId, stepIdx,           ...sharedGateParams },
@@ -587,7 +600,7 @@ export async function runPipeline(
           codebaseReady, taskDescription, resolvedModelId, stepModelOverrides,
           agentId, userId, runId, useSmartRouting, adaptiveStatsCache,
           pipelineSpan,
-          abortSignal: AbortSignal.timeout(STEP_TIMEOUT_MS),
+          abortSignal: AbortSignal.any([pipelineAC.signal, AbortSignal.timeout(STEP_TIMEOUT_MS)]),
         });
         totalInputTokens  += gateResult.inputTokens;
         totalOutputTokens += gateResult.outputTokens;
@@ -655,6 +668,7 @@ export async function runPipeline(
                 attempt,
               },
               lastImplSystemPrompt,
+              pipelineAC.signal,
             );
 
             totalInputTokens += feedbackResult.inputTokens;
@@ -876,8 +890,9 @@ export async function runPipeline(
       // IMPLEMENTATION_STEPS use generateObject() + CodeGenOutputSchema for guaranteed
       // structured file output. All other steps use generateText(). If generateObject()
       // fails (model capability gap), we fall back to generateText() + parseCodeBlocks.
-      const ac = new AbortController();
-      const timeoutId = setTimeout(() => ac.abort(), STEP_TIMEOUT_MS);
+      // Race step timeout against pipeline-level cancel.
+      // AbortSignal.any() is available in Node 20.3+ (project uses Node 22).
+      const stepSignal = AbortSignal.any([pipelineAC.signal, AbortSignal.timeout(STEP_TIMEOUT_MS)]);
 
       // Holds structured ParsedFile[] when generateObject succeeds — passed directly to
       // executeRealTestsFromFiles to avoid round-tripping through markdown.
@@ -893,7 +908,7 @@ export async function runPipeline(
               prompt,
               schema: CodeGenOutputSchema,
               maxOutputTokens: 8192, // Larger budget — full file content in response
-              abortSignal: ac.signal,
+              abortSignal: stepSignal,
               // Disable OpenAI strict-mode response_format — our Zod schema uses optional()
               // fields and min/max constraints that are rejected by strict mode. Using
               // strictJsonSchema: false falls back to JSON mode with client-side Zod validation.
@@ -946,7 +961,7 @@ export async function runPipeline(
               system: systemPrompt,
               prompt,
               maxOutputTokens: 4096,
-              abortSignal: ac.signal,
+              abortSignal: stepSignal,
             });
 
             stepOutput = fallback.text;
@@ -961,7 +976,7 @@ export async function runPipeline(
             system: systemPrompt,
             prompt,
             maxOutputTokens: 4096,
-            abortSignal: ac.signal,
+            abortSignal: stepSignal,
           });
 
           stepOutput = result.text;
@@ -976,7 +991,7 @@ export async function runPipeline(
         }
         throw err;
       } finally {
-        clearTimeout(timeoutId);
+        // No manual cleanup — AbortSignal.timeout() and pipelineAC are self-managed.
       }
 
       totalInputTokens += stepInputTokens;
@@ -1090,6 +1105,7 @@ export async function runPipeline(
                     attempt,
                   },
                   systemPrompt,
+                  pipelineAC.signal,
                 );
 
                 // Aggregate feedback-loop token usage into pipeline totals
@@ -1226,6 +1242,7 @@ export async function runPipeline(
               attempt,
             },
             lastImplSystemPrompt,
+            pipelineAC.signal,
           );
 
           // Aggregate feedback-loop token usage into pipeline totals
@@ -1269,8 +1286,7 @@ export async function runPipeline(
           ].join("\n");
 
           const testModel = getModel(stepModelId);
-          const testAC = new AbortController();
-          const testTimeoutId = setTimeout(() => testAC.abort(), STEP_TIMEOUT_MS);
+          const testSignal = AbortSignal.any([pipelineAC.signal, AbortSignal.timeout(STEP_TIMEOUT_MS)]);
 
           try {
             const testResult = await generateText({
@@ -1278,7 +1294,7 @@ export async function runPipeline(
               system: testSystemPrompt,
               prompt: rerunPrompt,
               maxOutputTokens: 4096,
-              abortSignal: testAC.signal,
+              abortSignal: testSignal,
             });
 
             currentTestOutput = testResult.text;
@@ -1291,7 +1307,7 @@ export async function runPipeline(
             });
             break;
           } finally {
-            clearTimeout(testTimeoutId);
+            // No manual cleanup — AbortSignal.timeout() and pipelineAC are self-managed.
           }
 
           const nowPassing = !didTestsFail(currentTestOutput);
@@ -1429,6 +1445,9 @@ export async function runPipeline(
     gitError,
   };
   } finally {
+    // Stop the cancel poller so it doesn't outlive the pipeline.
+    clearInterval(cancelPoller);
+
     // Close the pipeline span — always fires regardless of success/failure
     pipelineSpan.setAttributes({
       "sdlc.pipeline.total_input_tokens": totalInputTokens,
