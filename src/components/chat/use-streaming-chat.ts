@@ -18,7 +18,7 @@ interface UseStreamingChatReturn {
   setInput: (value: string) => void;
   isLoading: boolean;
   conversationId: string | undefined;
-  sendMessage: () => Promise<void>;
+  sendMessage: (overrideText?: string) => Promise<void>;
   stopGeneration: () => void;
   resetChat: () => void;
   loadConversation: (id: string, msgs: ChatMessage[]) => void;
@@ -52,11 +52,11 @@ export function useStreamingChat({
     }
   }, [persistKey]);
 
-  const sendMessage = useCallback(async () => {
-    const text = input.trim();
+  const sendMessage = useCallback(async (overrideText?: string) => {
+    const text = (overrideText ?? input).trim();
     if (!text || isLoading) return;
 
-    setInput("");
+    if (!overrideText) setInput("");
     setMessages((prev) => [...prev, { role: "user", content: text }]);
     setIsLoading(true);
 

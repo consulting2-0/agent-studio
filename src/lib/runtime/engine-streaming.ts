@@ -298,9 +298,12 @@ export function executeFlowStreaming(
               } catch { /* stream closed by client */ }
               const nodeLabel = nodeName ? `"${nodeName}"` : `node [${node.type}]`;
               const isTimeout = error instanceof Error && error.message.toLowerCase().includes("timeout");
-              const errorDetail = isTimeout
-                ? `${nodeLabel} timed out after ${Math.round(errDuration / 1000)}s`
-                : nodeLabel;
+              const isAborted = error instanceof Error && (error.name === "AbortError" || error.message.includes("aborted") || error.message.includes("cancelled"));
+              const errorDetail = isAborted
+                ? `${nodeLabel} was stopped`
+                : isTimeout
+                  ? `${nodeLabel} timed out after ${Math.round(errDuration / 1000)}s`
+                  : nodeLabel;
               const msg: OutputMessage = {
                 role: "assistant",
                 content: `There was an issue with ${errorDetail}. Continuing with the remaining steps.`,
@@ -342,9 +345,17 @@ export function executeFlowStreaming(
                 debugEmitNodeEnd(writer, context, node.id, "error", errDuration,
                   undefined, errorMsg);
               } catch { /* stream closed by client */ }
+              const isTimeout = error instanceof Error && error.message.toLowerCase().includes("timeout");
+              const isAborted = error instanceof Error && (error.name === "AbortError" || error.message.includes("aborted") || error.message.includes("cancelled"));
+              const sdkNodeLabel = nodeName ? `"${nodeName}"` : "a [claude_agent_sdk] step";
+              const sdkDetail = isAborted
+                ? `${sdkNodeLabel} was stopped`
+                : isTimeout
+                  ? `${sdkNodeLabel} timed out after ${Math.round(errDuration / 1000)}s`
+                  : sdkNodeLabel;
               const msg: OutputMessage = {
                 role: "assistant",
-                content: "There was an issue with the Claude Agent SDK node. Continuing with the remaining steps.",
+                content: `There was an issue with ${sdkDetail}. Continuing with the remaining steps.`,
               };
               allMessages.push(msg);
               try { writer.write({ type: "error", content: msg.content }); } catch { /* stream closed */ }
@@ -381,9 +392,17 @@ export function executeFlowStreaming(
                 debugEmitNodeEnd(writer, context, node.id, "error", errDuration,
                   undefined, errorMsg);
               } catch { /* stream closed by client */ }
+              const isTimeout = error instanceof Error && error.message.toLowerCase().includes("timeout");
+              const isAborted = error instanceof Error && (error.name === "AbortError" || error.message.includes("aborted") || error.message.includes("cancelled"));
+              const parallelLabel = nodeName ? `"${nodeName}"` : "the parallel step";
+              const parallelDetail = isAborted
+                ? `${parallelLabel} was stopped`
+                : isTimeout
+                  ? `${parallelLabel} timed out after ${Math.round(errDuration / 1000)}s`
+                  : parallelLabel;
               const msg: OutputMessage = {
                 role: "assistant",
-                content: `There was an issue with the parallel step${nodeName ? ` "${nodeName}"` : ""}. Continuing with remaining steps.`,
+                content: `There was an issue with ${parallelDetail}. Continuing with remaining steps.`,
               };
               allMessages.push(msg);
               try { writer.write({ type: "error", content: msg.content }); } catch { /* stream closed */ }

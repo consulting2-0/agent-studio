@@ -15,6 +15,7 @@ import {
   PanelLeftOpen,
   Workflow,
   GitBranch,
+  RotateCcw,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -30,6 +31,23 @@ interface ConversationSummary {
   preview: string;
 }
 
+/** Coloured dot that reflects conversation lifecycle status. */
+function ConvStatusDot({ status }: { status: string }) {
+  if (status === "ACTIVE") {
+    return (
+      <span className="relative flex size-2 shrink-0" title="Interrupted — can be resumed">
+        <span className="absolute inline-flex h-full w-full rounded-full bg-orange-400 opacity-75 animate-ping" />
+        <span className="relative inline-flex size-2 rounded-full bg-orange-500" />
+      </span>
+    );
+  }
+  if (status === "COMPLETED") {
+    return <span className="size-2 shrink-0 rounded-full bg-emerald-500/60" title="Completed" />;
+  }
+  // ABANDONED or unknown
+  return <span className="size-2 shrink-0 rounded-full bg-muted-foreground/20" title="Abandoned" />;
+}
+
 export default function ChatPage({
   params,
 }: {
@@ -43,6 +61,7 @@ export default function ChatPage({
   const [showSidebar, setShowSidebar] = useState(true);
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [activeConvId, setActiveConvId] = useState<string | null>(null);
+  const [resumingId, setResumingId] = useState<string | null>(null);
 
   const {
     messages,
@@ -99,6 +118,45 @@ export default function ChatPage({
       }
     } catch {
       // silent fail
+    }
+  }
+
+  /**
+   * Resume an ACTIVE (interrupted) conversation by re-sending the last user
+   * message. Because the fingerprint stored in __partial_results matches the
+   * original user message, agent-tools.ts will skip already-completed
+   * sub-agents and continue from where the conversation left off.
+   */
+  async function handleResumeConversation(conv: ConversationSummary): Promise<void> {
+    if (isLoading || resumingId === conv.id) return;
+    setResumingId(conv.id);
+    try {
+      const res = await fetch(`/api/agents/${agentId}/conversations/${conv.id}`);
+      const json = await res.json();
+      if (!json.success) return;
+
+      const msgs: ChatMessage[] = json.data.messages.map(
+        (m: { role: string; content: string; metadata?: Record<string, unknown> }) => ({
+          role: m.role as "user" | "assistant",
+          content: m.content,
+          ...(m.metadata ? { metadata: m.metadata } : {}),
+        })
+      );
+
+      loadConversation(conv.id, msgs);
+      setActiveConvId(conv.id);
+
+      // Find the last user message — its text is the fingerprint for partial results
+      const lastUserMsg = [...msgs].reverse().find((m) => m.role === "user");
+      if (lastUserMsg) {
+        await sendMessage(lastUserMsg.content);
+        // Refresh sidebar so status dot updates after completion
+        fetchConversations();
+      }
+    } catch {
+      // silent fail
+    } finally {
+      setResumingId(null);
     }
   }
 
@@ -173,27 +231,50 @@ export default function ChatPage({
                 </p>
               ) : (
                 conversations.map((conv) => (
-                  <button
-                    key={conv.id}
-                    onClick={() => handleSelectConversation(conv)}
-                    className={cn(
-                      "group w-full border-b border-border/40 px-3 py-2.5 text-left transition-colors last:border-0 hover:bg-white/[0.02]",
-                      activeConvId === conv.id && "bg-white/[0.04]"
+                  <div key={conv.id} className="border-b border-border/40 last:border-0">
+                    <button
+                      onClick={() => handleSelectConversation(conv)}
+                      className={cn(
+                        "group w-full px-3 py-2.5 text-left transition-colors hover:bg-white/[0.02]",
+                        activeConvId === conv.id && "bg-white/[0.04]"
+                      )}
+                    >
+                      <div className="mb-0.5 flex items-center gap-1.5">
+                        <ConvStatusDot status={conv.status} />
+                        <span className="text-[10px] text-muted-foreground/40">
+                          {new Date(conv.updatedAt).toLocaleDateString(undefined, {
+                            month: "short",
+                            day: "numeric",
+                          })}
+                        </span>
+                      </div>
+                      <p className="line-clamp-2 pl-[18px] text-xs text-muted-foreground group-hover:text-foreground">
+                        {conv.preview || "Empty conversation"}
+                      </p>
+                    </button>
+
+                    {/* Resume button — only for interrupted (ACTIVE) conversations */}
+                    {conv.status === "ACTIVE" && (
+                      <div className="px-3 pb-2 pl-[30px]">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void handleResumeConversation(conv);
+                          }}
+                          disabled={isLoading || resumingId === conv.id}
+                          className="flex items-center gap-1 text-[10px] text-orange-400/70 transition-colors hover:text-orange-400 disabled:opacity-40"
+                        >
+                          <RotateCcw
+                            className={cn(
+                              "size-2.5",
+                              resumingId === conv.id && "animate-spin"
+                            )}
+                          />
+                          {resumingId === conv.id ? "Resuming…" : "Resume"}
+                        </button>
+                      </div>
                     )}
-                  >
-                    <div className="mb-0.5 flex items-center gap-1.5">
-                      <MessageSquare className="size-3 shrink-0 text-muted-foreground/30" />
-                      <span className="text-[10px] text-muted-foreground/40">
-                        {new Date(conv.updatedAt).toLocaleDateString(undefined, {
-                          month: "short",
-                          day: "numeric",
-                        })}
-                      </span>
-                    </div>
-                    <p className="line-clamp-2 pl-[18px] text-xs text-muted-foreground group-hover:text-foreground">
-                      {conv.preview || "Empty conversation"}
-                    </p>
-                  </button>
+                  </div>
                 ))
               )}
             </div>
