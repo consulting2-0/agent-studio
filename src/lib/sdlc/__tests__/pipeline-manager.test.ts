@@ -50,6 +50,7 @@ import {
   cancelPipelineRun,
   isPipelineCancelled,
   detectAndResetStalePipelineRuns,
+  saveStepOutput,
 } from "../pipeline-manager";
 
 // ---------------------------------------------------------------------------
@@ -496,5 +497,98 @@ describe("detectAndResetStalePipelineRuns", () => {
     const diffMin = (Date.now() - cutoff.getTime()) / 60_000;
     expect(diffMin).toBeGreaterThan(44);
     expect(diffMin).toBeLessThan(46);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// saveStepOutput — Phase 12
+// ---------------------------------------------------------------------------
+
+describe("saveStepOutput", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("saves step output without advancing currentStep", async () => {
+    // Simulate the $transaction executing the callback
+    mockTransaction.mockImplementation(async (cb: (tx: unknown) => Promise<unknown>) => {
+      const tx = {
+        pipelineRun: {
+          findUnique: mockFindUnique,
+          update: mockUpdate,
+        },
+      };
+      return cb(tx);
+    });
+
+    const existingRow = makeRow({ stepResults: { "0": "discovery output" }, currentStep: 1 });
+    mockFindUnique.mockResolvedValue(existingRow);
+    mockUpdate.mockResolvedValue({ ...existingRow, stepResults: { "0": "discovery output", "1": "gate blocked output" } });
+
+    await saveStepOutput("run-1", 1, "gate blocked output");
+
+    // Should call update with merged stepResults but NO currentStep change
+    expect(mockUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "run-1" },
+        data: expect.objectContaining({
+          stepResults: { "0": "discovery output", "1": "gate blocked output" },
+          // currentStep must NOT appear in the update data
+        }),
+      }),
+    );
+
+    const updateCall = mockUpdate.mock.calls[0][0] as { data: Record<string, unknown> };
+    expect(updateCall.data).not.toHaveProperty("currentStep");
+  });
+
+  it("creates stepResults from scratch when run has no prior results", async () => {
+    mockTransaction.mockImplementation(async (cb: (tx: unknown) => Promise<unknown>) => {
+      const tx = {
+        pipelineRun: {
+          findUnique: mockFindUnique,
+          update: mockUpdate,
+        },
+      };
+      return cb(tx);
+    });
+
+    const emptyRow = makeRow({ stepResults: null, currentStep: 0 });
+    mockFindUnique.mockResolvedValue(emptyRow);
+    mockUpdate.mockResolvedValue({ ...emptyRow, stepResults: { "0": "first output" } });
+
+    await saveStepOutput("run-1", 0, "first output");
+
+    const updateCall = mockUpdate.mock.calls[0][0] as { data: { stepResults: Record<string, string> } };
+    expect(updateCall.data.stepResults).toEqual({ "0": "first output" });
+    expect(updateCall.data).not.toHaveProperty("currentStep");
+  });
+
+  it("preserves existing step results when adding a new one", async () => {
+    mockTransaction.mockImplementation(async (cb: (tx: unknown) => Promise<unknown>) => {
+      const tx = {
+        pipelineRun: {
+          findUnique: mockFindUnique,
+          update: mockUpdate,
+        },
+      };
+      return cb(tx);
+    });
+
+    const rowWithHistory = makeRow({
+      stepResults: { "0": "step0", "1": "step1", "2": "step2" },
+      currentStep: 3,
+    });
+    mockFindUnique.mockResolvedValue(rowWithHistory);
+    mockUpdate.mockResolvedValue(rowWithHistory);
+
+    await saveStepOutput("run-1", 3, "gate reviewer report");
+
+    const updateCall = mockUpdate.mock.calls[0][0] as { data: { stepResults: Record<string, string> } };
+    expect(updateCall.data.stepResults).toEqual({
+      "0": "step0",
+      "1": "step1",
+      "2": "step2",
+      "3": "gate reviewer report",
+    });
+    expect(updateCall.data).not.toHaveProperty("currentStep");
   });
 });
