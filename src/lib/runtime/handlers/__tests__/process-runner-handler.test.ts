@@ -242,4 +242,29 @@ describe("vitest source-file guard", () => {
     expect(commands[0]).toContain("--config");
     expect(commands[0]).toContain("./vitest.config.ts");
   });
+
+  it("does NOT double flags when command has inline flags AND args has the same flags", async () => {
+    // This is the Agent Studio bug: node stores flags in BOTH command and args fields.
+    // Expected: flags appear exactly once in the final command.
+    const ctx = makeContext();
+    const node = makeNode({
+      command: "vitest run --reporter=verbose --config ./vitest.config.ts",
+      args: ["run", "--reporter=verbose", "--config", "./vitest.config.ts"],
+    });
+
+    await processRunnerHandler(node as never, ctx);
+
+    const [commands] = mockRunVerificationCommands.mock.calls[0] as [string[]];
+    const cmd = commands[0];
+
+    // --config must appear exactly once (not twice)
+    const configCount = (cmd.match(/--config/g) ?? []).length;
+    expect(configCount).toBe(1);
+    // --reporter must appear exactly once
+    const reporterCount = (cmd.match(/--reporter/g) ?? []).length;
+    expect(reporterCount).toBe(1);
+    // `run` must appear exactly once
+    const runCount = (cmd.split(' ').filter(t => t === 'run').length);
+    expect(runCount).toBe(1);
+  });
 });

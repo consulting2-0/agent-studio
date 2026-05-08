@@ -142,8 +142,26 @@ export const processRunnerHandler: NodeHandler = async (node, context) => {
   const outputVariable = (node.data.outputVariable as string) || "processResult";
 
   // Resolve templates so {{testFilePath}} etc. get substituted before execution
-  const resolvedCommand = resolveTemplate(rawCommand, context.variables);
-  const templateResolvedArgs = rawArgs.map((arg) => resolveTemplate(arg, context.variables));
+  const resolvedCommandFull = resolveTemplate(rawCommand, context.variables);
+
+  // ── Anti-doubling guard ────────────────────────────────────────────────────────
+  // Agent Studio sometimes stores flags in BOTH `command` AND `args`
+  // (e.g. command="vitest run --config x", args=["run","--config","x"]).
+  // To avoid the doubled invocation that results, treat `command` as the
+  // executable-only token when explicit `args` are also provided.
+  // When `args` is empty the full command string is used as-is (backward compat).
+  let resolvedCommand: string;
+  let templateResolvedArgs: string[];
+  if (rawArgs.length > 0) {
+    // Explicit args supplied → strip inline flags from command, keep only the executable
+    const [exec = resolvedCommandFull] = resolvedCommandFull.trim().split(/\s+/);
+    resolvedCommand = exec;
+    templateResolvedArgs = rawArgs.map((arg) => resolveTemplate(arg, context.variables));
+  } else {
+    // No explicit args → honour the full command string (may contain inline flags)
+    resolvedCommand = resolvedCommandFull;
+    templateResolvedArgs = [];
+  }
   // Remap relative file paths to /tmp/sdlc when the original location is unwritable
   const { resolved: resolvedArgs, anyRemapped } = resolveArgPaths(templateResolvedArgs);
   // Guard: if this is a vitest command and a source file was passed instead of a test
