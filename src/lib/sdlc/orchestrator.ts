@@ -957,7 +957,7 @@ export async function runPipeline(
               system: systemPrompt,
               prompt,
               schema: CodeGenOutputSchema,
-              maxOutputTokens: 8192, // Larger budget — full file content in response
+              maxOutputTokens: 32000, // GPT-4.1 supports 32K output; SDK caps at model limit for others
               abortSignal: stepSignal,
               // Disable OpenAI strict-mode response_format — our Zod schema uses optional()
               // fields and min/max constraints that are rejected by strict mode. Using
@@ -969,6 +969,16 @@ export async function runPipeline(
 
             stepInputTokens = result.usage.inputTokens ?? 0;
             stepOutputTokens = result.usage.outputTokens ?? 0;
+
+            // Truncation guard: if the model stopped due to token limit, the JSON
+            // will be incomplete and produce garbled file content (e.g. "new Date[P").
+            // Treat length-truncated responses like a generateObject failure so we
+            // fall back to generateText which recovers more gracefully.
+            if (result.finishReason === "length") {
+              throw new Error(
+                `generateObject response truncated (finishReason=length) at ${stepOutputTokens} tokens — falling back to generateText`,
+              );
+            }
 
             // Runtime guard: schema no longer uses .min(1) (OpenAI strict-mode
             // rejects the minItems keyword), so we check here instead.
@@ -1010,7 +1020,7 @@ export async function runPipeline(
               model,
               system: systemPrompt,
               prompt,
-              maxOutputTokens: 4096,
+              maxOutputTokens: 16000, // Must match generateObject budget — this path handles large file outputs
               abortSignal: stepSignal,
             });
 
@@ -1025,7 +1035,7 @@ export async function runPipeline(
             model,
             system: systemPrompt,
             prompt,
-            maxOutputTokens: 4096,
+            maxOutputTokens: 8192, // Planning/review steps need headroom for detailed analysis
             abortSignal: stepSignal,
           });
 
@@ -1345,7 +1355,7 @@ export async function runPipeline(
               model: testModel,
               system: testSystemPrompt,
               prompt: rerunPrompt,
-              maxOutputTokens: 4096,
+              maxOutputTokens: 8192, // Test analysis can be verbose for complex failures
               abortSignal: testSignal,
             });
 

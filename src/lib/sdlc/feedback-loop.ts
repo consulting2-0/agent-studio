@@ -220,7 +220,7 @@ export async function runFeedbackIteration(
       model,
       system: systemPrompt,
       prompt,
-      maxOutputTokens: 8192,
+      maxOutputTokens: 16000, // Revised implementations can be as large as originals
       abortSignal,
     });
 
