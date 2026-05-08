@@ -1,0 +1,218 @@
+{
+  "name": "Agent Studio - Weekly Analytics Report",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "weeks",
+              "weeksInterval": 1,
+              "triggerAtDay": [1],
+              "triggerAtHour": 8,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      },
+      "id": "cron-trigger",
+      "name": "Every Monday 8am",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 300],
+      "notes": "Fires every Monday at 8:00 AM (server timezone)"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.AGENT_STUDIO_URL }}/api/analytics",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "period",
+              "value": "7d"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "fetch-analytics",
+      "name": "Fetch Agent Studio Analytics",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [460, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "agent-studio-api-key",
+          "name": "Agent Studio API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.AGENT_STUDIO_URL }}/api/agents",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "fetch-agents",
+      "name": "Fetch All Agents",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [460, 460],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "agent-studio-api-key",
+          "name": "Agent Studio API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const analytics = $('Fetch Agent Studio Analytics').item.json;\nconst agents = $('Fetch All Agents').item.json;\n\nconst now = new Date();\nconst weekStart = new Date(now - 7 * 24 * 60 * 60 * 1000);\n\nconst agentList = (agents.data || agents || [])\n  .slice(0, 10)\n  .map(a => `- ${a.name} (${a.model || 'default model'})`)\n  .join('\\n');\n\nconst analyticsStr = JSON.stringify(analytics, null, 2).slice(0, 2000);\n\nconst message = `Generate a professional weekly performance report for Agent Studio.\n\nReport Period: ${weekStart.toDateString()} - ${now.toDateString()}\n\nRaw Analytics Data:\n${analyticsStr}\n\nActive Agents (${(agents.data || agents || []).length} total):\n${agentList}\n\nPlease provide:\n1. Executive Summary (2-3 sentences)\n2. Key Metrics highlights\n3. Top performing agents\n4. Areas for improvement\n5. Recommendations for next week\n\nFormat as a clean, professional report suitable for stakeholder distribution.`;\n\nreturn [{ json: { prompt: message, week_start: weekStart.toISOString(), week_end: now.toISOString() } }];"
+      },
+      "id": "build-report-prompt",
+      "name": "Build Report Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [700, 380]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.AGENT_STUDIO_URL }}/api/agents/={{ $env.REPORT_AGENT_ID }}/chat",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "message",
+              "value": "={{ $json.prompt }}"
+            },
+            {
+              "name": "stream",
+              "value": false
+            }
+          ]
+        },
+        "options": { "timeout": 60000 }
+      },
+      "id": "report-agent",
+      "name": "Report Generator Agent",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [940, 380],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "agent-studio-api-key",
+          "name": "Agent Studio API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const agentResponse = $json.data?.messages?.find(m => m.role === 'assistant')?.content || 'Report generation failed.';\nconst promptData = $('Build Report Prompt').item.json;\n\nconst weekLabel = new Date(promptData.week_start).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })\n  + ' - '\n  + new Date(promptData.week_end).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });\n\nreturn [{\n  json: {\n    subject: `Agent Studio Weekly Report: ${weekLabel}`,\n    html_body: `<html><body style=\"font-family: Arial, sans-serif; max-width: 700px; margin: 0 auto; padding: 20px;\">\n<h1 style=\"color: #1a1a2e;\">📊 Agent Studio Weekly Report</h1>\n<p style=\"color: #666;\">${weekLabel}</p>\n<hr>\n<div style=\"white-space: pre-wrap; line-height: 1.6;\">${agentResponse.replace(/\\n/g, '<br>')}</div>\n<hr>\n<p style=\"color: #999; font-size: 12px;\">Generated automatically by Agent Studio × n8n</p>\n</body></html>`,\n    text_body: agentResponse\n  }\n}];"
+      },
+      "id": "format-email",
+      "name": "Format Report Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1160, 380]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $env.REPORT_FROM_EMAIL }}",
+        "toEmail": "={{ $env.REPORT_TO_EMAIL }}",
+        "subject": "={{ $json.subject }}",
+        "emailType": "html",
+        "message": "={{ $json.html_body }}",
+        "options": {}
+      },
+      "id": "send-email",
+      "name": "Send Report Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [1380, 380],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-credentials",
+          "name": "SMTP"
+        }
+      },
+      "notes": "Configure SMTP credentials in n8n settings"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SLACK_WEBHOOK_URL }}",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "text",
+              "value": "=:bar_chart: *Weekly Agent Studio Report sent!*\nCheck your inbox for the full report.\n\n_{{ $('Format Report Email').item.json.subject }}_"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "slack-notification",
+      "name": "Slack Notification",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1380, 520],
+      "notes": "Set SLACK_WEBHOOK_URL env var with an Incoming Webhook URL"
+    }
+  ],
+  "connections": {
+    "Every Monday 8am": {
+      "main": [
+        [
+          { "node": "Fetch Agent Studio Analytics", "type": "main", "index": 0 },
+          { "node": "Fetch All Agents", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Fetch Agent Studio Analytics": {
+      "main": [[{ "node": "Build Report Prompt", "type": "main", "index": 0 }]]
+    },
+    "Fetch All Agents": {
+      "main": [[{ "node": "Build Report Prompt", "type": "main", "index": 0 }]]
+    },
+    "Build Report Prompt": {
+      "main": [[{ "node": "Report Generator Agent", "type": "main", "index": 0 }]]
+    },
+    "Report Generator Agent": {
+      "main": [[{ "node": "Format Report Email", "type": "main", "index": 0 }]]
+    },
+    "Format Report Email": {
+      "main": [
+        [
+          { "node": "Send Report Email", "type": "main", "index": 0 },
+          { "node": "Slack Notification", "type": "main", "index": 0 }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "timezone": "Europe/Belgrade"
+  },
+  "tags": ["agent-studio", "reporting", "cron"],
+  "_readme": {
+    "title": "Weekly Analytics Report via Agent Studio",
+    "setup": [
+      "1. Set env vars: AGENT_STUDIO_URL, REPORT_AGENT_ID, REPORT_FROM_EMAIL, REPORT_TO_EMAIL, SLACK_WEBHOOK_URL",
+      "2. Create credential 'Agent Studio API Key' (httpHeaderAuth): Name=Authorization, Value=Bearer as_YOUR_KEY",
+      "3. Configure SMTP credentials for email sending",
+      "4. Activate the workflow — it will run every Monday at 8am",
+      "5. Use 'Test workflow' to run it immediately for the first time"
+    ]
+  }
+}

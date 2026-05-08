@@ -1,0 +1,232 @@
+{
+  "name": "Agent Studio - Slack Bot",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "slack-mention",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Slack Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "webhookId": "slack-mention-webhook",
+      "notes": "Set this URL in Slack App → Event Subscriptions → Request URL"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "url_verification",
+              "leftValue": "={{ $json.body.type }}",
+              "rightValue": "url_verification",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-challenge",
+      "name": "URL Verification?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ challenge: $('Slack Webhook Trigger').item.json.body.challenge }) }}",
+        "options": {}
+      },
+      "id": "respond-challenge",
+      "name": "Return Challenge",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [680, 160]
+    },
+    {
+      "parameters": {
+        "jsCode": "const event = $('Slack Webhook Trigger').item.json.body.event;\nconst botUserId = $env.SLACK_BOT_USER_ID || '';\n\n// Skip if message is from the bot itself or has no text\nif (event.bot_id || event.user === botUserId || !event.text) {\n  return [];\n}\n\n// Extract the message text (remove bot mention)\nconst text = event.text\n  .replace(/<@[A-Z0-9]+>/g, '')\n  .trim();\n\nreturn [{\n  json: {\n    channel: event.channel,\n    user: event.user,\n    thread_ts: event.thread_ts || event.ts,\n    message: text,\n    original_ts: event.ts\n  }\n}];"
+      },
+      "id": "parse-event",
+      "name": "Parse Slack Event",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 420]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.AGENT_STUDIO_URL }}/api/agents/={{ $env.SLACK_AGENT_ID }}/chat",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "message",
+              "value": "={{ $json.message }}"
+            },
+            {
+              "name": "stream",
+              "value": false
+            },
+            {
+              "name": "metadata",
+              "value": "={{ JSON.stringify({ slackChannel: $json.channel, slackUser: $json.user }) }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "call-agent",
+      "name": "Call Agent Studio",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [900, 420],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "agent-studio-api-key",
+          "name": "Agent Studio API Key"
+        }
+      },
+      "notes": "Credential: httpHeaderAuth, Name=Authorization, Value=Bearer as_YOUR_KEY"
+    },
+    {
+      "parameters": {
+        "jsCode": "const agentResponse = $json.data?.messages?.find(m => m.role === 'assistant')?.content\n  || $json.data?.response\n  || 'Sorry, I could not process your request.';\n\nreturn [{\n  json: {\n    channel: $('Parse Slack Event').item.json.channel,\n    thread_ts: $('Parse Slack Event').item.json.thread_ts,\n    text: agentResponse\n  }\n}];"
+      },
+      "id": "extract-response",
+      "name": "Extract Agent Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 420]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://slack.com/api/chat.postMessage",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "channel",
+              "value": "={{ $json.channel }}"
+            },
+            {
+              "name": "thread_ts",
+              "value": "={{ $json.thread_ts }}"
+            },
+            {
+              "name": "text",
+              "value": "={{ $json.text }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "reply-slack",
+      "name": "Reply in Slack Thread",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1340, 420],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "slack-bot-token",
+          "name": "Slack Bot Token"
+        }
+      },
+      "notes": "Credential: httpHeaderAuth, Name=Authorization, Value=Bearer xoxb-YOUR-BOT-TOKEN"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"ok\": true}",
+        "options": {}
+      },
+      "id": "respond-ok",
+      "name": "Respond 200 OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1340, 300]
+    }
+  ],
+  "connections": {
+    "Slack Webhook Trigger": {
+      "main": [
+        [{ "node": "URL Verification?", "type": "main", "index": 0 }]
+      ]
+    },
+    "URL Verification?": {
+      "main": [
+        [{ "node": "Return Challenge", "type": "main", "index": 0 }],
+        [{ "node": "Parse Slack Event", "type": "main", "index": 0 }]
+      ]
+    },
+    "Parse Slack Event": {
+      "main": [
+        [{ "node": "Call Agent Studio", "type": "main", "index": 0 }]
+      ]
+    },
+    "Call Agent Studio": {
+      "main": [
+        [{ "node": "Extract Agent Response", "type": "main", "index": 0 }]
+      ]
+    },
+    "Extract Agent Response": {
+      "main": [
+        [
+          { "node": "Reply in Slack Thread", "type": "main", "index": 0 },
+          { "node": "Respond 200 OK", "type": "main", "index": 0 }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": ["agent-studio", "slack"],
+  "_readme": {
+    "title": "Slack Bot powered by Agent Studio",
+    "setup": [
+      "1. Set env vars: AGENT_STUDIO_URL, SLACK_AGENT_ID, SLACK_BOT_USER_ID",
+      "2. Create credential 'Agent Studio API Key' (httpHeaderAuth): Name=Authorization, Value=Bearer as_YOUR_KEY",
+      "3. Create credential 'Slack Bot Token' (httpHeaderAuth): Name=Authorization, Value=Bearer xoxb-YOUR-TOKEN",
+      "4. Activate workflow → copy Webhook URL",
+      "5. Slack App → Event Subscriptions → set Request URL to the Webhook URL",
+      "6. Subscribe to bot events: app_mention, message.channels"
+    ]
+  }
+}

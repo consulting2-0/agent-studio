@@ -1,0 +1,190 @@
+{
+  "name": "Agent Studio - GitHub PR Security Review",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "github-pr",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "github-webhook",
+      "name": "GitHub PR Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "notes": "Set in GitHub repo → Settings → Webhooks. Events: Pull requests"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "is-opened",
+              "leftValue": "={{ $json.body.action }}",
+              "rightValue": "opened",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ],
+          "combinator": "or"
+        }
+      },
+      "id": "filter-opened",
+      "name": "Only New PRs",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 1,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const pr = $json.body.pull_request;\nconst repo = $json.body.repository;\n\nreturn [{\n  json: {\n    pr_number: pr.number,\n    pr_title: pr.title,\n    pr_body: pr.body || '',\n    pr_url: pr.html_url,\n    pr_diff_url: pr.diff_url,\n    repo_full_name: repo.full_name,\n    author: pr.user.login,\n    base_branch: pr.base.ref,\n    head_branch: pr.head.ref,\n    changed_files: pr.changed_files,\n    additions: pr.additions,\n    deletions: pr.deletions,\n    commits_url: pr.commits_url,\n    review_comments_url: pr.review_comments_url,\n    comments_url: pr.comments_url\n  }\n}];"
+      },
+      "id": "extract-pr",
+      "name": "Extract PR Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://api.github.com/repos/{{ $json.repo_full_name }}/pulls/{{ $json.pr_number }}/files",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "fetch-changed-files",
+      "name": "Fetch Changed Files",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [900, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "github-token",
+          "name": "GitHub Token"
+        }
+      },
+      "notes": "Credential: httpHeaderAuth, Name=Authorization, Value=Bearer ghp_YOUR_TOKEN"
+    },
+    {
+      "parameters": {
+        "jsCode": "const files = $json;\nconst prData = $('Extract PR Data').item.json;\n\n// Build a summary of changed files for the security agent\nconst fileSummary = files\n  .slice(0, 20) // limit to 20 files to stay within token limits\n  .map(f => `${f.status.toUpperCase()}: ${f.filename} (+${f.additions}/-${f.deletions})\\n${(f.patch || '').slice(0, 500)}`)\n  .join('\\n\\n---\\n\\n');\n\nconst message = `Please perform a security review of this Pull Request:\n\n**PR #${prData.pr_number}: ${prData.pr_title}**\nAuthor: ${prData.author}\nBranch: ${prData.head_branch} → ${prData.base_branch}\nChanged files: ${prData.changed_files} (+${prData.additions}/-${prData.deletions})\n\nPR Description:\n${prData.pr_body || 'No description provided'}\n\n## Changed Files (patches):\n${fileSummary}\n\nProvide:\n1. Security risk level (LOW/MEDIUM/HIGH/CRITICAL)\n2. List of specific security concerns found\n3. Recommendations for each concern\n4. Overall approval recommendation`;\n\nreturn [{\n  json: {\n    ...prData,\n    security_prompt: message,\n    files_count: files.length\n  }\n}];"
+      },
+      "id": "build-prompt",
+      "name": "Build Security Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.AGENT_STUDIO_URL }}/api/agents/={{ $env.SECURITY_AGENT_ID }}/chat",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "message",
+              "value": "={{ $json.security_prompt }}"
+            },
+            {
+              "name": "stream",
+              "value": false
+            }
+          ]
+        },
+        "options": { "timeout": 60000 }
+      },
+      "id": "security-agent",
+      "name": "Security Scanner Agent",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1340, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "agent-studio-api-key",
+          "name": "Agent Studio API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const agentResult = $json.data?.messages?.find(m => m.role === 'assistant')?.content || 'Security review completed.';\nconst prData = $('Build Security Prompt').item.json;\n\n// Detect risk level from agent response\nconst riskMatch = agentResult.match(/\\b(CRITICAL|HIGH|MEDIUM|LOW)\\b/i);\nconst riskLevel = riskMatch ? riskMatch[1].toUpperCase() : 'UNKNOWN';\n\nconst riskEmoji = {\n  CRITICAL: '🚨',\n  HIGH: '⚠️',\n  MEDIUM: '🟡',\n  LOW: '✅',\n  UNKNOWN: '🔍'\n}[riskLevel];\n\nconst comment = `## ${riskEmoji} Agent Studio Security Review\\n\\n**Risk Level: ${riskLevel}**\\n\\n${agentResult}\\n\\n---\\n*Automated review by [Agent Studio](${process.env.AGENT_STUDIO_URL}) Security Scanner*`;\n\nreturn [{\n  json: {\n    pr_number: prData.pr_number,\n    repo_full_name: prData.repo_full_name,\n    comment_body: comment,\n    risk_level: riskLevel\n  }\n}];"
+      },
+      "id": "format-review",
+      "name": "Format Review Comment",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1560, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.github.com/repos/{{ $json.repo_full_name }}/issues/{{ $json.pr_number }}/comments",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "body",
+              "value": "={{ $json.comment_body }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "post-pr-comment",
+      "name": "Post PR Comment",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1780, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "github-token",
+          "name": "GitHub Token"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "GitHub PR Webhook": {
+      "main": [[{ "node": "Only New PRs", "type": "main", "index": 0 }]]
+    },
+    "Only New PRs": {
+      "main": [[{ "node": "Extract PR Data", "type": "main", "index": 0 }]]
+    },
+    "Extract PR Data": {
+      "main": [[{ "node": "Fetch Changed Files", "type": "main", "index": 0 }]]
+    },
+    "Fetch Changed Files": {
+      "main": [[{ "node": "Build Security Prompt", "type": "main", "index": 0 }]]
+    },
+    "Build Security Prompt": {
+      "main": [[{ "node": "Security Scanner Agent", "type": "main", "index": 0 }]]
+    },
+    "Security Scanner Agent": {
+      "main": [[{ "node": "Format Review Comment", "type": "main", "index": 0 }]]
+    },
+    "Format Review Comment": {
+      "main": [[{ "node": "Post PR Comment", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true
+  },
+  "tags": ["agent-studio", "github", "security"],
+  "_readme": {
+    "title": "GitHub PR Security Review via Agent Studio",
+    "setup": [
+      "1. Set env vars: AGENT_STUDIO_URL, SECURITY_AGENT_ID",
+      "2. Create credential 'Agent Studio API Key' (httpHeaderAuth): Name=Authorization, Value=Bearer as_YOUR_KEY",
+      "3. Create credential 'GitHub Token' (httpHeaderAuth): Name=Authorization, Value=Bearer ghp_YOUR_TOKEN (needs repo scope)",
+      "4. Activate workflow → copy Webhook URL",
+      "5. GitHub repo → Settings → Webhooks → Add webhook → set URL, Content-Type=application/json, Events: Pull requests"
+    ]
+  }
+}
