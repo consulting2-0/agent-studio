@@ -178,6 +178,19 @@ All API routes: `{ success: true, data: T }` or `{ success: false, error: string
 - `src/lib/db/rls-middleware.ts` — `withOrgContext(orgId, fn)` sets `app.current_org_id` session parameter then executes `fn` inside a transaction
 - Applied via `prisma.$extends` in `src/lib/prisma.ts`; migration: `prisma/migrations/20240108000000_enable_rls/`
 
+## RLS Rollout Status
+
+- **Live:** 0a (withOrgContext $transaction), 0a.5 (HAL-8 hotfix), 0a.6 (Sentry 42501), 0b (DB roles), 0e (hnsw in tx)
+- **Not started:** 0a.7 (CI fix), 0c (JWT currentOrgId + AsyncLocalStorage), 0f (feature flag)
+- **Partial:** 0d (NULL agents blocked by hotfix; backfill migration pending)
+- **Status checker skill:** `skills/rls-status-checker/`
+- **Master plan:** `skill-rls-rollout-PLAN-V2.md`
+- **Execution order (Phase 0 remaining):**
+  1. `0a.7` — CI fix; independent
+  2. `0f` + `0c` + `0d` — all three parallel
+  3. `0b.5` — last; blocked on both 0c (currentOrgId in workers) and 0d (no NULL agents)
+- **Feature flag system:** `src/lib/feature-flags/index.ts` — `DEFAULT_FLAGS` map; `0f` adds `RLS_ENFORCEMENT_ENABLED: false` here
+
 ### async-execution Feature Flag
 - ⚠️ Flag is wired at 100% rollout in `src/lib/feature-flags/index.ts` and checked in the chat route
 - **Currently disabled in production** — the worker service is not yet deployed on Railway; do not enable via env until the worker is live
