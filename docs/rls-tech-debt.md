@@ -236,6 +236,82 @@ schema-accurate CI database.
 
 ---
 
+### 6. `processTimeouts` cron assumes DATABASE_URL has BYPASSRLS
+
+**Severity**: HIGH if assumption is wrong — silent governance failure post-flag-flip
+**Surfaced in**: Phase 1 #10 ApprovalPolicy (PR #138, 2026-05-24)
+**Resolve before**: Phase 1 #14 (Agent) merge OR before RLS flag flip, whichever comes first
+
+**Context**
+
+Phase 1 #10 preserved the existing `processTimeouts` cron pattern (called from
+`src/lib/governance/approval-engine.ts` via BullMQ `processGovernanceTimeoutJob`
+in `src/lib/queue/worker.ts`). The function queries `PolicyDecision` with
+`include: { policy: { select: { timeoutApprove: true } } }` — meaning it JOINs
+against `ApprovalPolicy` rows across all tenants.
+
+The function deliberately uses no `withOrgContext` because it is a cross-org cron
+that must see every organization's expired decisions. The comment added in PR #138
+documents this intent.
+
+**The assumption**
+
+`withAdminBypass` in `src/lib/api/tenant-context.ts` is currently:
+
+```typescript
+export function withAdminBypass<T>(fn: (db: PrismaClient) => Promise<T>): Promise<T> {
+  return fn(prisma); // same prisma client as everything else
+}
+```
+
+It does NOT switch the DB role — it is a documentation helper only. The actual
+bypass relies on the `DATABASE_URL` connection role having `BYPASSRLS` at the
+PostgreSQL level (granted in Phase 0b). If that assumption is wrong, both
+`withAdminBypass` callers AND the unguarded `processTimeouts` pattern will fail
+in the same way.
+
+**Risk post-flag-flip**
+
+If `DATABASE_URL` connects as `app_user` (no BYPASSRLS):
+
+1. `processTimeouts` runs in the BullMQ worker — ALS is empty, `app.current_org_id`
+   is never set
+2. `ApprovalPolicy` include returns `null` for every decision (RLS filters all rows)
+3. `d.policy.timeoutApprove` throws `TypeError: Cannot read properties of null`
+4. All auto-timeout governance decisions silently stop processing
+5. Agents waiting on approval will hang indefinitely
+
+**Pre-flag-flip verification steps**
+
+1. SSH into Railway prod or use Railway DB Query tab:
+   ```sql
+   SELECT rolbypassrls FROM pg_roles WHERE rolname = current_user;
+   ```
+   Should return `true`. If it returns `false`, the assumption is broken.
+
+2. Alternatively, check which role `DATABASE_URL` uses:
+   ```sql
+   SELECT current_user, session_user;
+   ```
+   Should return `admin_user` (or whichever role Phase 0b granted BYPASSRLS to).
+
+**Remediation options if verification fails**
+
+**(a) Env change (preferred):** Update `DATABASE_URL` to connect as `admin_user`
+(the BYPASSRLS role created in Phase 0b). No code change required. Requires
+Railway env var update and redeploy.
+
+**(b) Code change:** Refactor `processTimeouts` to explicitly use a separate admin
+DB connection or to use raw SQL with `SET LOCAL row_security = off`. Note that
+simply wrapping with `withAdminBypass` is NOT sufficient — it still calls
+`fn(prisma)` which uses the same `DATABASE_URL` connection.
+
+**Do not fix now** — document only. Verification is cheap; the fix (if needed)
+is a one-line env change. Deferring avoids scope creep in the Phase 1 migration
+sequence.
+
+---
+
 ## Future-watch (no action required yet)
 
 These are not gates but should be reviewed before scaling beyond
