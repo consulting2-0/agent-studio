@@ -14,6 +14,7 @@ import { addFlowJob } from "@/lib/queue";
 import { createJobEventStream } from "@/lib/queue/events";
 import { isFeatureEnabled } from "@/lib/feature-flags";
 import { checkBudget } from "@/lib/budget/cost-tracker";
+import { trySaveCrPayload } from "@/lib/soma/cr-payload";
 
 const MAX_MESSAGE_LENGTH = 10_000;
 
@@ -367,6 +368,11 @@ export async function POST(
 
     const result = await executeFlow(context, message);
     const totalResponseTimeMs = Date.now() - startTime;
+
+    const lastMsg = result.messages.at(-1);
+    if (lastMsg) {
+      trySaveCrPayload(lastMsg.content, context.userId ?? null).catch(() => {});
+    }
 
     trackChatResponse({
       agentId,
