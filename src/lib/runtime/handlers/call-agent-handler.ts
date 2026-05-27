@@ -853,6 +853,13 @@ async function executeSubAgent(params: SubAgentParams): Promise<SubAgentResult> 
     // Workspace creation is non-critical
   }
 
+  const subAgentUserMessage: string | undefined =
+    typeof input.last_message === "string" && input.last_message
+      ? input.last_message
+      : Object.keys(input).length > 0
+        ? JSON.stringify(input)
+        : undefined;
+
   const subContext: RuntimeContextWithDepth = {
     conversationId: conversation.id,
     agentId: targetAgentId,
@@ -861,8 +868,11 @@ async function executeSubAgent(params: SubAgentParams): Promise<SubAgentResult> 
     variables: {
       ...input,
       ...(workspace ? { _workspace_path: workspace.basePath } : {}),
+      ...(subAgentUserMessage ? { last_message: subAgentUserMessage } : {}),
     },
-    messageHistory: [],
+    messageHistory: subAgentUserMessage
+      ? [{ role: "user", content: subAgentUserMessage }]
+      : [],
     isNewConversation: true,
     _a2aDepth: depth,
     _a2aCallStack: callStack,
