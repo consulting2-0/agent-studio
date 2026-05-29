@@ -44,7 +44,11 @@
       "mcp__railway__list-deployments",
       "Bash(curl -s -w \"\\\\nHTTP_STATUS:%{http_code}\" https://agent-studio-production-c43e.up.railway.app/api/health)",
       "Bash(curl -s -w \"\\\\nHTTP_STATUS:%{http_code}\" https://agent-studio-production-c43e.up.railway.app/api/ecc/templates)",
-      "Bash(git *)"
+      "Bash(git *)",
+      "mcp__railway__environment_status"
     ]
-  }
+  },
+  "enabledMcpjsonServers": [
+    "obsidian"
+  ]
 }
