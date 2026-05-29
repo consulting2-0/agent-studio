@@ -173,3 +173,4 @@ __pycache__/
 /.obsidian/
 *.canvas
 *.base
+!scripts/lint-vault.mjs
