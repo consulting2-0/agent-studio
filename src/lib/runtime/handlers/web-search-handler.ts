@@ -1,6 +1,8 @@
 import type { NodeHandler } from "../types";
 import { resolveTemplate } from "../template";
 import { logger } from "@/lib/logger";
+import { detectInjection } from "@/lib/safety/injection-detector";
+import { writeAuditLog } from "@/lib/safety/audit-logger";
 
 const DEFAULT_MAX_RESULTS = 5;
 const DEFAULT_OUTPUT_VARIABLE = "search_results";
@@ -81,14 +83,50 @@ export const webSearchHandler: NodeHandler = async (node, context) => {
       results = [];
     }
 
+    const safeResults: SearchResult[] = [];
+    for (const r of results) {
+      try {
+        const injCheck = detectInjection(`${r.title} ${r.snippet}`);
+        if (injCheck.detected) {
+          logger.warn("web_search: injection detected, dropping result", {
+            agentId: context.agentId,
+            url: r.url,
+            title: r.title,
+            patterns: injCheck.patterns,
+            severity: injCheck.severity,
+          });
+          writeAuditLog({
+            userId: context.userId,
+            action: "SAFETY_INPUT_BLOCKED",
+            resourceType: "Agent",
+            resourceId: context.agentId,
+            after: {
+              source: "web_search",
+              url: r.url,
+              title: r.title,
+              patterns: injCheck.patterns,
+              severity: injCheck.severity as string,
+            },
+          }).catch(() => {});
+        } else {
+          safeResults.push(r);
+        }
+      } catch {
+        logger.warn("web_search: injection check failed, dropping result", {
+          agentId: context.agentId,
+          url: r.url,
+        });
+      }
+    }
+
     return {
       messages: [],
       nextNodeId: null,
       waitForInput: false,
       updatedVariables: {
         ...context.variables,
-        [outputVariable]: results,
-        [`${outputVariable}_count`]: results.length,
+        [outputVariable]: safeResults,
+        [`${outputVariable}_count`]: safeResults.length,
       },
     };
   } catch (err) {
