@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAuth, isAuthError } from "@/lib/api/auth-guard";
-import { prismaRead } from "@/lib/prisma";
+import { prisma, prismaRead } from "@/lib/prisma";
+import { withOrgContext } from "@/lib/db/rls-middleware";
 import { logger } from "@/lib/logger";
 
 const PERIOD_HOURS: Record<string, number> = {
@@ -24,10 +25,12 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   const since = new Date(Date.now() - hours * 60 * 60 * 1000);
 
   try {
-    const ownAgents = await prismaRead.agent.findMany({
-      where: { OR: [{ userId: auth.userId }, { userId: null }] },
-      select: { id: true },
-    });
+    const ownAgents = await withOrgContext(prisma, auth.organizationId, (tx) =>
+      tx.agent.findMany({
+        where: { OR: [{ userId: auth.userId }, { userId: null }] },
+        select: { id: true },
+      }),
+    );
     const agentIds = ownAgents.map((a) => a.id);
 
     const [runsTotal, runsSuccess, runsCompleted, spend, latency, openReviews] = await Promise.all([
